@@ -2857,7 +2857,8 @@ ProvisionOutcome provisionAppDetailed(uint32_t appId,
 	std::string sha20;
 	{
 		std::uint8_t tmp[20];
-		if (!sha1BytesInternal(wire.data(), wire.size(), tmp)) return false;
+		if (!sha1BytesInternal(wire.data(), wire.size(), tmp))
+			return ProvisionOutcome::LocalFailure;
 		sha20.assign(reinterpret_cast<const char*>(tmp), 20);
 	}
 
