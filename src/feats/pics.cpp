@@ -130,7 +130,8 @@ bool hasNormalizedCache(uint32_t appId)
 		if (!ifs.read(wire.data(), rawSize)) return false;
 
 		std::uint8_t digest[kSha1Size]{};
-		AppInfoProvision::sha1Bytes(wire.data(), wire.size(), digest);
+		if (!AppInfoProvision::sha1Bytes(wire.data(), wire.size(), digest))
+			return false;
 		return std::memcmp(declaredSha.data(), digest, kSha1Size) == 0;
 	}
 	catch (...)

@@ -200,7 +200,7 @@ std::mutex& provisioningPassMutex();
 // Compute the 20-byte SHA-1 digest through the same dynamically resolved
 // libcrypto helper used by the provisioning paths. The plugin deliberately
 // does not link libcrypto directly because Steam supplies the runtime.
-void sha1Bytes(const void* data, std::size_t size, std::uint8_t out[20]);
+bool sha1Bytes(const void* data, std::size_t size, std::uint8_t out[20]);
 
 // Cache publication tokens invalidate provider/PICS work that started before
 // an app was removed. The publication mutex is also held across quarantine so

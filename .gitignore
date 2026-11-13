@@ -1,6 +1,9 @@
 .clangd
 .git
 .github
+!.github/
+!.github/workflows/
+!.github/workflows/build-linux-i386.yml
 bin
 obj
 dist

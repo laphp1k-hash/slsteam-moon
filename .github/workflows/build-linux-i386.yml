@@ -1,0 +1,95 @@
+name: Build Linux i386 SLSsteam
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-linux-i386.yml'
+      - 'src/**'
+      - 'tools/test_sha1_runtime.cpp'
+      - 'Makefile'
+      - 'scripts/**'
+  pull_request:
+    paths:
+      - '.github/workflows/build-linux-i386.yml'
+      - 'src/**'
+      - 'tools/test_sha1_runtime.cpp'
+      - 'Makefile'
+      - 'scripts/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
+    steps:
+      - name: Install i386 toolchain and libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          dpkg --add-architecture i386
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Dpkg::Options::="--force-overwrite" \
+            install -y --no-install-recommends \
+            ca-certificates g++-multilib make pkg-config file binutils \
+            git \
+            libcurl4-openssl-dev:amd64 libcurl4-openssl-dev:i386 \
+            libssl-dev:amd64 libssl-dev:i386
+          dpkg --print-foreign-architectures | grep -qx i386
+          printf 'int main() { return 0; }\n' | g++ -m32 -x c++ - -o /tmp/i386-probe
+          file /tmp/i386-probe | grep -q 'ELF 32-bit.*Intel 80386'
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Verify original architecture and dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(dpkg --print-architecture)" = amd64
+          grep -q -- '-m32' Makefile
+          test -d /usr/lib/i386-linux-gnu
+          pkg-config --exists libcurl
+          test -f /usr/lib/i386-linux-gnu/libcrypto.so
+          test -f /usr/lib/i386-linux-gnu/libcurl.so
+
+      - name: Test SHA-1 success and explicit resolution failure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          g++ -m32 -std=c++20 -Wall -Wextra -Werror -Isrc \
+            tools/test_sha1_runtime.cpp -ldl -o /tmp/test_sha1_runtime
+          file /tmp/test_sha1_runtime | grep -q 'ELF 32-bit.*Intel 80386'
+          /tmp/test_sha1_runtime
+
+      - name: Build SLSsteam
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make clean
+          make -j2
+
+      - name: Verify ELF architecture and runtime dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s bin/SLSsteam.so
+          file bin/SLSsteam.so | grep -q 'ELF 32-bit.*Intel 80386'
+          readelf -h bin/SLSsteam.so | grep -q 'Class:.*ELF32'
+          readelf -h bin/SLSsteam.so | grep -q 'Machine:.*Intel 80386'
+          ldd bin/SLSsteam.so | tee /tmp/slssteam-ldd.txt
+          ! grep -q 'not found' /tmp/slssteam-ldd.txt
+          sha256sum bin/SLSsteam.so | tee bin/SLSsteam.so.sha256
+
+      - name: Upload installable library
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLSsteam-linux-i386
+          path: |
+            bin/SLSsteam.so
+            bin/SLSsteam.so.sha256
+          if-no-files-found: error
+          retention-days: 30

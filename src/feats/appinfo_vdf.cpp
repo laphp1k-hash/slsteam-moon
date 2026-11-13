@@ -10,6 +10,7 @@
 #include "../log.hpp"
 #include "../utils/atomic_file.hpp"
 #include "../utils/process_lock.hpp"
+#include "../utils/sha1_runtime.hpp"
 
 #include "base64/base64.hpp"
 #include "prewarm.hpp"
@@ -26,7 +27,6 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
-#include <openssl/sha.h>
 #include <dlfcn.h>
 #include <sstream>
 #include <string>
@@ -562,22 +562,12 @@ bool validateGeneratedVdf(const std::vector<uint8_t>& data,
 // Compute SHA-1 (binary_hash field)
 // ---------------------------------------------------------------------------
 
-void sha1(const void* data, size_t n, uint8_t out[20])
+bool sha1(const void* data, size_t n, uint8_t out[20])
 {
-	static unsigned char* (*p_SHA1)(const unsigned char *d, size_t n, unsigned char *md) = nullptr;
-	if (!p_SHA1)
-	{
-		void* handle = dlopen("libcrypto.so.1.1", RTLD_NOLOAD | RTLD_LAZY);
-		if (!handle) handle = dlopen("libcrypto.so.1.0.0", RTLD_NOLOAD | RTLD_LAZY);
-		if (!handle) handle = dlopen("libcrypto.so.3", RTLD_NOLOAD | RTLD_LAZY);
-		if (!handle) handle = RTLD_DEFAULT;
-		p_SHA1 = (unsigned char*(*)(const unsigned char*, size_t, unsigned char*))dlsym(handle, "SHA1");
-	}
-	
-	if (p_SHA1)
-		p_SHA1(static_cast<const uint8_t*>(data), n, out);
-	else
-		memset(out, 0, 20);
+	std::string error;
+	if (Sha1Runtime::compute(data, n, out, error)) return true;
+	g_pLog->warn("AppInfoVdf: SHA-1 failed: %s\n", error.c_str());
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +714,8 @@ bool mergeAppImpl(AppInfoFile& f,
 	ne.pics_token    = 0;
 	std::memcpy(ne.sha, sha.data(), 20);
 	ne.change_number = changeNumber;
-	sha1(indexed.data(), indexed.size(), ne.binary_hash);
+	if (!sha1(indexed.data(), indexed.size(), ne.binary_hash))
+	{ err = "SHA-1 implementation unavailable"; return false; }
 	ne.binary_vdf    = std::move(indexed);
 
 	// Replace existing entry by appid, or append.
@@ -814,7 +805,8 @@ bool loadCachedBuffer(const std::string& metaPath, uint32_t expectedAppId,
 		}
 
 		uint8_t digest[20]{};
-		sha1(out.buffer.data(), out.buffer.size(), digest);
+		if (!sha1(out.buffer.data(), out.buffer.size(), digest))
+		{ err = "SHA-1 implementation unavailable"; return false; }
 		const bool shaMatches = out.sha.size() == sizeof(digest) &&
 		    std::memcmp(out.sha.data(), digest, sizeof(digest)) == 0;
 		const AppInfoProvision::cache::CacheRecordFacts facts{

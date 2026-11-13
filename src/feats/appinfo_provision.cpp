@@ -41,12 +41,11 @@
 #include "../utils/ManifestFetch.hpp"
 #include "../utils/atomic_file.hpp"
 #include "../utils/process_lock.hpp"
+#include "../utils/sha1_runtime.hpp"
 
 #include "base64/base64.hpp"
 #include "yaml-cpp/yaml.h"
 #include "yaml-cpp/emitter.h"
-
-#include <openssl/sha.h>
 
 #include <curl/curl.h>
 #include <dlfcn.h>
@@ -1192,26 +1191,12 @@ bool hasDepotsForApp(const std::string& appinfoVdfPath, uint32_t appId)
 // SHA-1 helper (libcrypto via dlsym, same pattern as appinfo_vdf.cpp).
 // ---------------------------------------------------------------------------
 
-void sha1BytesInternal(const void* data, std::size_t n, std::uint8_t out[20])
+bool sha1BytesInternal(const void* data, std::size_t n, std::uint8_t out[20])
 {
-	static unsigned char* (*p_SHA1)(const unsigned char*, size_t, unsigned char*) = nullptr;
-	if (!p_SHA1)
-	{
-		void* h = dlopen("libcrypto.so.3", RTLD_NOLOAD | RTLD_LAZY);
-		if (!h) h = dlopen("libcrypto.so.3", RTLD_LAZY);
-		if (!h) h = dlopen("libcrypto.so.1.1", RTLD_LAZY);
-		if (!h) h = RTLD_DEFAULT;
-		p_SHA1 = (unsigned char* (*)(const unsigned char*, size_t, unsigned char*))
-		         dlsym(h, "SHA1");
-	}
-	if (p_SHA1)
-	{
-		p_SHA1(reinterpret_cast<const unsigned char*>(data), n, out);
-	}
-	else
-	{
-		std::memset(out, 0, 20);
-	}
+	std::string error;
+	if (Sha1Runtime::compute(data, n, out, error)) return true;
+	g_pLog->warn("AppInfoProvision: SHA-1 failed: %s\n", error.c_str());
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1665,7 +1650,8 @@ bool readValidatedCacheBufferLocked(uint32_t appId, std::string& wireOut,
 		}
 
 		std::uint8_t digestBytes[20]{};
-		sha1BytesInternal(wire.data(), wire.size(), digestBytes);
+		if (!sha1BytesInternal(wire.data(), wire.size(), digestBytes))
+		{ diag = "SHA-1 implementation unavailable"; return false; }
 		const std::string actualSha(
 		    reinterpret_cast<const char*>(digestBytes), sizeof(digestBytes));
 
@@ -1893,7 +1879,8 @@ SourceResult renderAndPersist(uint32_t appId, const YAML::Node& appNode,
 	std::string sha20;
 	{
 		std::uint8_t tmp[20];
-		sha1BytesInternal(wire.data(), wire.size(), tmp);
+		if (!sha1BytesInternal(wire.data(), wire.size(), tmp))
+		{ g_pLog->warn("AppInfoProvision: app=%u SHA-1 unavailable; cache not written\n", appId); return SourceResult::LocalFailure; }
 		sha20.assign(reinterpret_cast<const char*>(tmp), 20);
 	}
 
@@ -2092,9 +2079,9 @@ std::int64_t dlcMetadataCacheMtimeSecs(uint32_t appId) noexcept
 	return static_cast<std::int64_t>(st.st_mtime);
 }
 
-void sha1Bytes(const void* data, std::size_t size, std::uint8_t out[20])
+bool sha1Bytes(const void* data, std::size_t size, std::uint8_t out[20])
 {
-	sha1BytesInternal(data, size, out);
+	return sha1BytesInternal(data, size, out);
 }
 
 bool publishCachePairLocked(uint32_t appId, const std::string& wire,
@@ -2366,8 +2353,8 @@ bool readValidatedDlcMetadataCache(
 	if (!DlcMetadata::decodeCache(encoded, record) ||
 		record.baseAppId != baseAppId) return false;
 	std::uint8_t baseDigest[20]{};
-	sha1BytesInternal(
-		validatedBaseWire.data(), validatedBaseWire.size(), baseDigest);
+	if (!sha1BytesInternal(
+		validatedBaseWire.data(), validatedBaseWire.size(), baseDigest)) return false;
 	const std::string baseSha(
 		reinterpret_cast<const char*>(baseDigest), sizeof(baseDigest));
 	if (!DlcMetadata::baseIdentityMatches(
@@ -2383,8 +2370,8 @@ bool readValidatedDlcMetadataCache(
 			app.wireBuffer, app.appid, baseAppId, normalized) ||
 			normalized != app.wireBuffer) return false;
 		std::uint8_t digest[20]{};
-		sha1BytesInternal(
-			app.wireBuffer.data(), app.wireBuffer.size(), digest);
+		if (!sha1BytesInternal(
+			app.wireBuffer.data(), app.wireBuffer.size(), digest)) return false;
 		if (app.sha != std::string(
 			reinterpret_cast<const char*>(digest), sizeof(digest))) return false;
 	}
@@ -2410,7 +2397,7 @@ static bool dlcMetadataPublicationMatchesBaseLocked(
 		record.baseAppId, metadataText, metadata) ||
 		metadata.appId != record.baseAppId) return false;
 	std::uint8_t digest[20]{};
-	sha1BytesInternal(currentWire.data(), currentWire.size(), digest);
+	if (!sha1BytesInternal(currentWire.data(), currentWire.size(), digest)) return false;
 	const std::string currentSha(
 		reinterpret_cast<const char*>(digest), sizeof(digest));
 	return DlcMetadata::publicationMatchesBase(
@@ -2870,7 +2857,7 @@ ProvisionOutcome provisionAppDetailed(uint32_t appId,
 	std::string sha20;
 	{
 		std::uint8_t tmp[20];
-		sha1BytesInternal(wire.data(), wire.size(), tmp);
+		if (!sha1BytesInternal(wire.data(), wire.size(), tmp)) return false;
 		sha20.assign(reinterpret_cast<const char*>(tmp), 20);
 	}
 
@@ -3647,7 +3634,7 @@ std::vector<DlcMetadataWork> discoverDlcMetadataWork(
 		item.record.baseAppId = request.appId;
 		item.record.baseGeneration = request.managedGeneration;
 		std::uint8_t baseDigest[20]{};
-		sha1BytesInternal(baseWire.data(), baseWire.size(), baseDigest);
+		if (!sha1BytesInternal(baseWire.data(), baseWire.size(), baseDigest)) continue;
 		item.record.baseSha.assign(
 			reinterpret_cast<const char*>(baseDigest), sizeof(baseDigest));
 		const CacheProbe probe = probeCache(
@@ -3726,7 +3713,11 @@ void enrichAndPublishDlcMetadata(
 				continue;
 			}
 			std::uint8_t digest[20]{};
-			sha1BytesInternal(normalized.data(), normalized.size(), digest);
+			if (!sha1BytesInternal(normalized.data(), normalized.size(), digest))
+			{
+				item.fetchComplete = false;
+				break;
+			}
 			const auto change = cmChanges.find(candidate);
 			item.record.apps.push_back({
 				.appid = candidate,
