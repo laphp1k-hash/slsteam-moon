@@ -8,6 +8,7 @@ on:
       - 'src/**'
       - 'tools/test_sha1_runtime.cpp'
       - 'tools/test_audit_load.cpp'
+      - 'docs/BUILD-INSTALL-AND-RECOVERY.md'
       - 'Makefile'
       - 'scripts/**'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - 'src/**'
       - 'tools/test_sha1_runtime.cpp'
       - 'tools/test_audit_load.cpp'
+      - 'docs/BUILD-INSTALL-AND-RECOVERY.md'
       - 'Makefile'
       - 'scripts/**'
 
@@ -97,5 +99,6 @@ jobs:
           path: |
             bin/SLSsteam.so
             bin/SLSsteam.so.sha256
+            docs/BUILD-INSTALL-AND-RECOVERY.md
           if-no-files-found: error
           retention-days: 30
